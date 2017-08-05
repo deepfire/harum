@@ -1,0 +1,49 @@
+name:                harum
+version:             0.0.1
+synopsis:            Type-safe market computation thing
+license:             AGPL-3
+license-file:        LICENSE
+author:              Kosyrev Serge
+maintainer:          kosyrev.serge@protonmail.com
+category:            Database
+build-type:          Simple
+
+cabal-version:       >=1.10
+
+-- library
+executable harum
+  hs-source-dirs:      src
+  default-language:    Haskell2010
+
+  -- exposed-modules:
+
+  --                 Harum
+
+  build-depends:       aeson
+                     , base >=4.8
+                     , base-unicode-symbols
+                     , brick
+                     , containers >=0.5
+                     , data-default
+                     , either
+                     , ghc-prim >=0.4
+                     , hashable
+                     , http-api-data
+                     , http-client
+                     , http-client-tls
+                     , lens
+                     , QuickCheck
+                     , semigroupoids >= 5.0.0.3
+                     , semigroups >= 0.16.2.2
+                     , servant
+                     , servant-client
+                     , split
+                     , text
+                     , time
+                     , transformers
+                     , unordered-containers
+                     , vector
+                     , vty
+
+                     , dependent-sum
+                     , clock

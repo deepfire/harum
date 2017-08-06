@@ -33,6 +33,8 @@ executable harum
                      , http-client-tls
                      , lens
                      , QuickCheck
+                     , random
+                     , safe
                      , semigroupoids >= 5.0.0.3
                      , semigroups >= 0.16.2.2
                      , servant

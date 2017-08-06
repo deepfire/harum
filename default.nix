@@ -1,9 +1,9 @@
 { mkDerivation, aeson, base, base-unicode-symbols, brick, clock
 , containers, data-default, dependent-sum, either, ghc-prim
-, hashable, http-api-data, http-client, http-client-tls, lens
-, QuickCheck, semigroupoids, semigroups, servant, servant-client
-, split, stdenv, text, time, transformers, unordered-containers
-, vector, vty
+, hashable, http-api-data, http-client, http-client-tls, lens, pgdl
+, QuickCheck, random, safe, semigroupoids, semigroups, servant
+, servant-client, split, stdenv, text, time, transformers
+, unordered-containers, vector, vty
 }:
 mkDerivation {
   pname = "harum";
@@ -14,9 +14,9 @@ mkDerivation {
   executableHaskellDepends = [
     aeson base base-unicode-symbols brick clock containers data-default
     dependent-sum either ghc-prim hashable http-api-data http-client
-    http-client-tls lens QuickCheck semigroupoids semigroups servant
-    servant-client split text time transformers unordered-containers
-    vector vty
+    http-client-tls lens pgdl QuickCheck random safe semigroupoids
+    semigroups servant servant-client split text time transformers
+    unordered-containers vector vty
   ];
   description = "Type-safe market computation thing";
   license = stdenv.lib.licenses.agpl3;

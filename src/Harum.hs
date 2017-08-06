@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wall -Wno-unticked-promoted-constructors -Wno-orphans #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds #-}
@@ -11,6 +12,7 @@
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeInType #-}
@@ -22,168 +24,102 @@
 module Harum
 where
 
-import           Control.Applicative
-import           Control.Arrow
-import           Control.Lens
 import           Control.Monad
 import           Control.Monad.IO.Class
-import           Control.Monad.Trans.Either
-import           Data.Aeson
-import           Data.Aeson.Types
-import           Data.Char
-import           Data.Function
-import           Data.List
+import           Data.List                    hiding (lines)
 import           Data.Maybe
-import           Data.Monoid
-import           Data.Proxy
+import           Data.Monoid                  hiding (Last)
 import           Data.Text                           (Text)
 import qualified Data.Text                    as      T
 import qualified Data.Text.IO                 as      T
-import           Data.Time.Clock
-import           Data.Time.Clock.POSIX               (posixSecondsToUTCTime)
-import           Data.Time.LocalTime                 (LocalTime (..), utcToLocalTime, hoursToTimeZone)
-import           GHC.Generics                 hiding (C)
-import           Network.HTTP.Client.TLS      hiding (Proxy, Response, path)
+import           Network.HTTP.Client.TLS
 import qualified Network.HTTP.Client          as      HTTP
-import qualified Network.HTTP.Client.TLS      as      HTTP
+import           Prelude                      hiding (lines)
 import           Prelude.Unicode
-import           Servant.API
 import           Servant.Client
+import           Safe
 import           Text.Printf
 
 
--- * UI imports
-
--- import qualified Graphics.Vty                     as VT
+-- * Local imports
+--
+import           Types
+import           Bittrex
+import           GenericClient
 -- import           UI
 
 
-lowerShowT ∷ Show a ⇒ a → Text
-lowerShowT = T.pack ∘ (toLower <$>) ∘ show
+-- * A stab at analytics
+
+-- analyse'triangle ∷ Market a b → Market b c → Rate Median '(a, c)
+-- analyse'triangle left right =
+--   market'median left `compose'medians` market'median right
 
 
-data CoinType
-  = BITCOIN
-  deriving (Show, Generic)
+-- * HUD
 
-data Sym
-  = BTC
-  | BCC
-  | ETH
-  | USDT
-  deriving (Show, Generic)
+trade'hud ∷ Int → Trade → [Text]
+trade'hud depth (Trade m@Market{..} Book{..}) =
+  let Syms{..}     = syms m
+      info         = T.pack $ printf ". %-*.7f" (int 11) (fromRate mk'last)
+      pp'order Order{..}
+                   = T.pack $ printf "%-*s %*.7f" (int 14) (brief rate) (int 11) volume
+      asks'        = take depth (pp'order <$> asks)
+      bids'        = take depth (pp'order <$> bids)
+      width        = fromMaybe 22 $ (T.length <$> headMay asks')
+      head'left    = show s'base
+      head'right   = show s'market
+      header       = T.pack $ printf "%-*s%*s" (width `div` 2 + width `mod` 2) head'left (width `div` 2) head'right
+  in [    header ]
+     <>   reverse asks'
+     <> [ info ]
+     <>           bids'
 
-data Act
-  = BUY
-  | SELL
-  deriving (Show, Generic)
+base'pairs, extra'pairs, hud'pairs ∷ [APair]
+base'pairs =
+  [ PA $ Pair Usdt Btc
+  , PA $ Pair Usdt Bcc
+  ]
+extra'pairs =
+  [
+    PA $ Pair Btc  Bcc
+  ]
+hud'pairs =
+  base'pairs <> extra'pairs
 
-data Cu (a ∷ Sym) where
-  Btc  ∷ Cu BTC
-  Bcc  ∷ Cu BCC
-  Eth  ∷ Cu ETH
-  Usdt ∷ Cu USDT
-deriving instance Show (Cu a)
+hud'frame ∷ ClientM ()
+hud'frame = do
+  trades ← sequence [ get'trade 20 pa
+                    | PA pa ← hud'pairs ]
+  let huds      = trade'hud 10 <$> trades
+      hud'ws    = (maximum ∘ (T.length <$>)) <$> huds
+      hud'lines = transpose huds
+      hud       = [ T.concat ∘ intersperse "  │  "
+                    $ (uncurry justify <$> zip widths lines)
+                  | (widths, lines) ← zip (repeat hud'ws) hud'lines]
+      justify w s = T.pack $ printf "%-*s" w s
+  liftIO $ forM_ hud T.putStrLn
 
-data ACu where
-  ACu ∷ { fromACu ∷ Cu a } → ACu
-
-data Op (a ∷ Act) where
-  Buy  ∷ Op BUY
-  Sell ∷ Op SELL
-
-data FillType where
-  Fill        ∷ FillType
-  PartialFill ∷ FillType
-  deriving (Generic, Show)
-
-
-data Market where
-  Market ∷ Sym → Sym → Market
-  deriving (Generic, Show)
-
-instance ToHttpApiData Market where
-  toUrlPiece   (Market b t) = lowerShowT b <> "-" <> lowerShowT t
-  toQueryParam (Market b t) = lowerShowT b <> "-" <> lowerShowT t
-
-data OrderBookType
-  = OBBuy
-  | OBSell
-  | OBBoth
-  deriving (Show, Generic)
-
-instance ToHttpApiData OrderBookType where
-  toUrlPiece   = T.drop 2 ∘ lowerShowT
-  toQueryParam = T.drop 2 ∘ lowerShowT
-
-
--- | https://bittrex.com/api/{version}/{method}?param=value
-bittrexURL = (BaseUrl Https "bittrex.com" 443 "/api/v1.1")
-
-data Response a where
-  Response ∷
-    { success ∷ Bool
-    , message ∷ Text
-    , result  ∷ a
-    } → Response a
-    deriving (Generic, Show)
-instance FromJSON a ⇒ FromJSON (Response a)
-
-type BittrexAPI =
-          "public/getmarkets"
-          :> Get '[JSON] (Response [DescMarket])
-     :<|> "public/getcurrencies"
-          :> Get '[JSON] (Response [DescCurrency])
-     :<|> "public/getticker"
-          :> QueryParam "market" Market
-          :> Get '[JSON] (Response  DescTicker)                 -- BTC-LTC
-     :<|> "public/getmarketsummaries"
-          :> Get '[JSON] (Response [DescMarketSummary])
-     :<|> "public/getmarketsummary"
-          :> QueryParam "market" Market
-          :> Get '[JSON] (Response [DescMarketSummary])
-     :<|> "public/getorderbook"
-          :> QueryParam "market" Market
-          :> QueryParam "depth"  Int
-          :> QueryParam "type"   OrderBookType
-          :> Get '[JSON] (Response  DescOrderBook)
-     :<|> "public/getmarkethistory"
-          :> QueryParam "market" Market
-          :> Get '[JSON] (Response [DescMarketHistoryPoint])
-
-bittrexAPI ∷ Proxy BittrexAPI
-bittrexAPI = Proxy
-
-getmarkets           :<|>
-  getcurrencies      :<|>
-  getticker          :<|>
-  getmarketsummaries :<|>
-  getmarketsummary   :<|>
-  getorderbook       :<|>
-  getmarkethistory
-  =
-  client bittrexAPI
-
--- OAuth: http://mittrasw.blogspot.ru/2016/05/oauth-10a-for-etrade-api-using-haskell.html
 run ∷ IO ()
 run = do
-  -- HTTP.managerModifyRequest (\r → do
-  --                               pure r)
-  manager ← newTlsManagerWith 
-            tlsManagerSettings
-            { HTTP.managerModifyRequest =
-                (\r → do
-                    -- print r
-                    pure r) }
-  res     ← flip runClientM (ClientEnv manager bittrexURL) $
-            getticker (Just $ Market USDT BTC)
+  manager ← newTlsManagerWith tlsManagerSettings { HTTP.managerModifyRequest = (\r → pure r) }
+  let conn = ClientEnv manager bittrexURL
+  res     ← flip runClientM conn
+            hud'frame
   case res of
     Left err → putStrLn $ "Error: " <> show err
-    Right Response{..}  → do
-      print success
-      print message
-      print result
+    Right _  → pure ()
 
+  -- xs ← handlerr $ getcurrencies
+  -- forM_ xs $
+  --   \DescCurrency{..}→
+  --     liftIO $ printf "| %s\n" cuCurrency
+  -- xs ← handlerr $ getmarkets
+  -- forM_ xs $
+  --   \DescMarket{..}→
+  --     liftIO $ printf "%s→%s:\n" (show maBaseCurrency) (show maMarketCurrency)
+
+-- OAuth: http://mittrasw.blogspot.ru/2016/05/oauth-10a-for-etrade-api-using-haskell.html
 -- $apikey='xxx';
 -- $apisecret='xxx';
 -- $nonce=time();
@@ -195,247 +131,90 @@ run = do
 -- $obj = json_decode($execResult);
 
 
-instance FromJSON Sym
-instance FromJSON Act
-instance FromJSON CoinType
-instance FromJSON FillType
+-- data Route (r ∷ [(Sym, Sym)]) where
+--   R     ∷ Rate k '(a, b) → Route '[ '(a, b)]
+--   (:-:) ∷ Rate k '(a, b) → Route ('(b, c) : d) → Route ('(a, b) : '(b, c) : d)
+-- deriving instance Show (Route a)
 
-dropPrefix ∷ (Generic a, GFromJSON Zero (Rep a)) ⇒ String → Value → Parser a
-dropPrefix x = genericParseJSON $ defaultOptions { fieldLabelModifier = (stripPrefix x >>> fromMaybe (error "valiant stripPrefix error")) }
+-- infixr :-:
 
-data DescMarket where
-  DescMarket ∷
-    { maCurrency           ∷ Sym
-    , maBaseCurrency       ∷ Sym
-    , maCurrencyLong       ∷ Text
-    , maBaseCurrencyLong   ∷ Text
-    , maMinTradeSize       ∷ Double
-    , maName               ∷ Text
-    , maIsActive           ∷ Bool
-    , maCreated            ∷ UTCTime
-    } → DescMarket
-    deriving (Show, Generic)
-instance FromJSON DescMarket where parseJSON = dropPrefix "ma"
+-- type family Reduce x where
+--   Reduce ('(a, b) : '[])         = '(a, b)
+--   Reduce ('(a, b) : '(b, c) : d) = Reduce ('(a, c) : d)
 
-data DescCurrency where
-  DescCurrency ∷
-    { cuCurrency           ∷ Sym 
-    , cuCurrencyLong       ∷ Text
-    , cuMinConfirmation    ∷ Int
-    , cuTxFee              ∷ Double
-    , cuIsActive           ∷ Bool
-    , cuCoinType           ∷ CoinType
-    , cuBaseAddress        ∷ Maybe Text
-    } → DescCurrency
-    deriving (Show, Generic)
-instance FromJSON DescCurrency where parseJSON = dropPrefix "cu"
+-- describe ∷ Route a → [ACu]
+-- describe (R (Rate k a b _)) = [ACu a, ACu b]
+-- describe ((Rate k a _ _) :-: x) = ACu a : describe x
 
-data DescTicker where
-  DescTicker ∷
-    { tiBid                ∷ Double
-    , tiAsk                ∷ Double
-    , tiLast               ∷ Double
-    } → DescTicker
-    deriving (Show, Generic)
-instance FromJSON DescTicker where parseJSON = dropPrefix "ti"
+-- reduce ∷ Route a → Rate k (Reduce a)
+-- reduce        (R r)         = r
+-- reduce (r1 :-: R r2)        = compose r1 r2
+-- reduce (r1 :-: (r2 :-: r3)) = reduce ((compose r1 r2) :-: r3)
 
-data DescMarketSummary where
-  DescMarketSummary ∷
-    { msName               ∷ Text
-    , msHigh               ∷ Double
-    , msLow                ∷ Double
-    , msVolume             ∷ Double
-    , msLast               ∷ Double
-    , msBaseVolume         ∷ Double
-    , msTimeStamp          ∷ UTCTime
-    , msBid                ∷ Double
-    , msAsk                ∷ Double
-    , msOpenBuyOrders      ∷ Int
-    , msOpenSellOrders     ∷ Int
-    , msPrevDay            ∷ Double
-    , msCreated            ∷ UTCTime
-    , msDisplayMarketName  ∷ Maybe Text
-    } → DescMarketSummary
-    deriving (Show, Generic)
-instance FromJSON DescMarketSummary where parseJSON = dropPrefix "ms"
+-- data Path where
+--   Path ∷ Route a → Rate k (Reduce a) → Path
+-- deriving instance Show Path
 
-data DescPosition where
-  DescPosition ∷
-    { poQuantity           ∷ Double
-    , poRate               ∷ Double
-    } → DescPosition
-    deriving (Show, Generic)
-instance FromJSON DescPosition where parseJSON = dropPrefix "po"
-
-data DescOrderBook where
-  DescOrderBook ∷
-    { obbuy                ∷ [DescPosition]
-    , obsell               ∷ [DescPosition]
-    } → DescOrderBook
-    deriving (Show, Generic)
-instance FromJSON DescOrderBook where parseJSON = dropPrefix "ob"
-
-data DescMarketHistoryPoint where
-  DescMarketHistoryPoint ∷
-    { mhId                 ∷ Integer
-    , mhTimestamp          ∷ UTCTime
-    , mhQuantity           ∷ Double
-    , mhPrice              ∷ Double
-    , mhTotal              ∷ Double
-    , mhFillType           ∷ FillType
-    , mhOrderType          ∷ Act
-    } → DescMarketHistoryPoint
-    deriving (Show, Generic)
-instance FromJSON DescMarketHistoryPoint where parseJSON = dropPrefix "mh"
-
--- data Desc where
---   Desc ∷
---     {  ∷ 
---     ,  ∷ 
---     } → Desc
+-- path ∷ Route a → Path
+-- path route = Path route (reduce route)
 
 
-ppACu ∷ ACu → String
-ppACu (ACu x) = toUpper <$> show x
+-- type family Dst (op ∷ Action) (a ∷ Sym) (b ∷ Sym) ∷ Sym where
+--   Dst BUY  a b = b
+--   Dst SELL a b = a
+-- type family Src (op ∷ Action) (a ∷ Sym) (b ∷ Sym) ∷ Sym where
+--   Src BUY  a b = a
+--   Src SELL a b = b
+
+-- exec ∷ Val (Src op a b) → Act act → Rate k '(a, b) →  Val (Dst op a b)
+-- exec  (Val _ v)           Buy      (Rate k a b r)   = Val b (v / r)
+-- exec  (Val _ v)           Sell     (Rate k a b r)   = Val a (v * r)
 
 
-data Val a where
-  Val ∷ Cu a → Float → Val a
-deriving instance Show (Val a)
+-- paths ∷ Rate k '(USDT, BTC) → Rate k '(USDT, BCC) → Rate k '(USDT, ETH) → Rate k '(BTC, ETH) → Rate k '(BTC, BCC) → [Path]
+-- paths usd'btc usd'bcc usd'eth btc'eth btc'bcc  =
+--   let btc'usd = inverse usd'btc
+--       bcc'usd = inverse usd'bcc
+--       eth'btc = inverse btc'eth
+--       eth'usd = inverse usd'eth
+--       bcc'btc = inverse btc'bcc
+--   in
+--   [ path $ R usd'btc
+--   , path $ usd'bcc :-: R bcc'btc
+--   , path $ usd'bcc :-:   bcc'btc :-: R btc'usd
+--   , path $ usd'btc :-:   btc'bcc :-: R bcc'usd
+--   , path $ R bcc'usd
+--   , path $ bcc'btc :-: R btc'usd
+--   , path $ bcc'btc :-:   btc'usd :-: R usd'bcc
+--   , path $ bcc'usd :-:   usd'btc :-: R btc'bcc
+--   , path $ R btc'bcc
+--   , path $ btc'usd :-: R usd'bcc
+--   , path $ btc'usd :-:   usd'bcc :-: R bcc'btc
+--   , path $ btc'bcc :-:   bcc'usd :-: R usd'btc
+--   , path $ R bcc'btc
+--   , path $ bcc'usd :-: R usd'btc
+--   , path $ bcc'usd :-:   usd'btc :-: R btc'bcc
+--   , path $ R btc'usd
+--   , path $ btc'bcc :-: R bcc'usd
+--   , path $ btc'bcc :-:   bcc'usd :-: R usd'btc
+--   --
+--   -- , path $ usd'eth :-: R eth'btc
+--   -- , path $ R usd'eth
+--   -- , path $ usd'btc :-: R btc'eth
+--   -- , path $ R btc'eth
+--   -- , path $ btc'usd :-: R usd'eth
+--   -- , path $ btc'eth :-: R eth'usd
+--   -- , path $ R eth'usd
+--   -- , path $ eth'btc :-: R btc'usd
+--   ]
 
-
-data Rate t where
-  Rate ∷ Cu a → Cu b → Float → Rate '(a, b)
-deriving instance Show (Rate a)
+-- ppp ∷ Path → IO ()
+-- ppp (Path route rate) =
+--   printf "%20s: %s\n" (intercalate "→" $ (ppACu <$> describe route)) (show (rRate rate))
 
-rRate ∷ Rate a → Float
-rRate (Rate _ _ r) = r
+-- ppr ∷ forall a . Route a → IO ()
+-- ppr route = ppp $ path route
 
-ppRate ∷ Rate a → String
-ppRate (Rate c0 c1 r) = printf "%s %s %f" (show c0) (show c1) r
-
-inverse ∷  Rate '(a, b) → Rate '(b, a)
-inverse    (Rate a b r) =   Rate b a (1 / r)
-compose ∷  Rate '(a, b) → Rate '(b, c)  →  Rate '(a, c)
-compose    (Rate a _ ab)   (Rate _ c bc)    = Rate a c (ab * bc)
-
-
-data Route (r ∷ [(Sym, Sym)]) where
-  R     ∷ Rate '(a, b) → Route '[ '(a, b)]
-  (:-:) ∷ Rate '(a, b) → Route ('(b, c) : d) → Route ('(a, b) : '(b, c) : d)
-deriving instance Show (Route a)
-
-infixr :-:
-
-type family Reduce x where
-  Reduce ('(a, b) : '[])         = '(a, b)
-  Reduce ('(a, b) : '(b, c) : d) = Reduce ('(a, c) : d)
-
-describe ∷ Route a → [ACu]
-describe (R (Rate a b _)) = [ACu a, ACu b]
-describe ((Rate a _ _) :-: x) = ACu a : describe x
-
-reduce ∷ Route a → Rate (Reduce a)
-reduce        (R r)         = r
-reduce (r1 :-: R r2)        = compose r1 r2
-reduce (r1 :-: (r2 :-: r3)) = reduce ((compose r1 r2) :-: r3)
-
-data Path where
-  Path ∷ Route a → Rate (Reduce a) → Path
-deriving instance Show Path
-
-path ∷ Route a → Path
-path route = Path route (reduce route)
-
-
-type family Dst (op ∷ Act) (a ∷ Sym) (b ∷ Sym) ∷ Sym where
-  Dst BUY  a b = b
-  Dst SELL a b = a
-type family Src (op ∷ Act) (a ∷ Sym) (b ∷ Sym) ∷ Sym where
-  Src BUY  a b = a
-  Src SELL a b = b
-
-exec ∷ Val (Src op a b) → Op op → Rate '(a, b)  →  Val (Dst op a b)
-exec   (Val _ v)            Buy     (Rate a b r) = Val b (v / r)
-exec   (Val _ v)            Sell    (Rate a b r) = Val a (v * r)
-
-
--- Rate Usd Btc 2673.0
--- Rate Usd Eth 200.182
--- Rate Btc Eth 0.07533684
-
-paths ∷ Rate '(USDT, BTC) → Rate '(USDT, BCC) → Rate '(USDT, ETH) → Rate '(BTC, ETH) → Rate '(BTC, BCC) → [Path]
-paths usd'btc usd'bcc usd'eth btc'eth btc'bcc  =
-  let btc'usd = inverse usd'btc
-      bcc'usd = inverse usd'bcc
-      eth'btc = inverse btc'eth
-      eth'usd = inverse usd'eth
-      bcc'btc = inverse btc'bcc
-  in
-  [ path $ R usd'btc
-  , path $ usd'bcc :-: R bcc'btc
-  , path $ usd'bcc :-:   bcc'btc :-: R btc'usd
-  , path $ usd'btc :-:   btc'bcc :-: R bcc'usd
-  , path $ R bcc'usd
-  , path $ bcc'btc :-: R btc'usd
-  , path $ bcc'btc :-:   btc'usd :-: R usd'bcc
-  , path $ bcc'usd :-:   usd'btc :-: R btc'bcc
-  , path $ R btc'bcc
-  , path $ btc'usd :-: R usd'bcc
-  , path $ btc'usd :-:   usd'bcc :-: R bcc'btc
-  , path $ btc'bcc :-:   bcc'usd :-: R usd'btc
-  , path $ R bcc'btc
-  , path $ bcc'usd :-: R usd'btc
-  , path $ bcc'usd :-:   usd'btc :-: R btc'bcc
-  , path $ R btc'usd
-  , path $ btc'bcc :-: R bcc'usd
-  , path $ btc'bcc :-:   bcc'usd :-: R usd'btc
-  --
-  -- , path $ usd'eth :-: R eth'btc
-  -- , path $ R usd'eth
-  -- , path $ usd'btc :-: R btc'eth
-  -- , path $ R btc'eth
-  -- , path $ btc'usd :-: R usd'eth
-  -- , path $ btc'eth :-: R eth'usd
-  -- , path $ R eth'usd
-  -- , path $ eth'btc :-: R btc'usd
-  ]
-
-ppp ∷ Path → IO ()
-ppp (Path route rate) =
-  printf "%20s: %s\n" (intercalate "→" $ (ppACu <$> describe route)) (show (rRate rate))
-
-ppr ∷ forall a . Route a → IO ()
-ppr route = ppp $ path route 
-
-pp ∷ Rate '(USDT, BTC) → Rate '(USDT, BCC) → Rate '(BTC, BCC) → Rate '(USDT, ETH) → Rate '(BTC, ETH) → IO ()
-pp ub uc bc ue be =
-  mapM_ ppp (paths ub uc ue be bc)
-
-main ∷ IO ()
-main = do
-  pp
-    (Rate Usdt Btc 2663)
-    (Rate Usdt Bcc 700)
-    (Rate Btc  Bcc 0.265)
-    (Rate Usdt Eth 217)
-    (Rate Btc  Eth 0.0810)
--- main = do
---   let g = molecule "Available work" (VT.KBackTab, VT.KChar '\t') False
---           [ (APt WTExpr,       AtmF (derive_atom (Name "<inputbar>")      ∷ FEditor))
---           , (APt WTScreenTabs, AtmF (derive_atom def                      ∷ STabs))
---           , (APt WTScreen,     AtmF (derive_atom def                      ∷ Screen))
---           ]
---   _ ← UI.run $
---       case yt_failure of
---         Nothing → [g]
---         -- XXX: message story is broken
---         Just e  → (:[]) ∘ molecule_set_popup "Error" g -- XXX: how to automatically reflow text in brick?
---                   $  [ " "
---                      , "  Continuable error while querying YouTrack server for issues:"
---                      , " " ]
---                   <> (concat ∘ map (chunksOf 80) ∘ lines $ show e)
---                   <> [ " "
---                      , "  Esc to continue with fake YT issues.."
---                      , " " ]
---   pure ()
+-- pp ∷ Rate k '(USDT, BTC) → Rate k '(USDT, BCC) → Rate k '(BTC, BCC) → Rate k '(USDT, ETH) → Rate k '(BTC, ETH) → IO ()
+-- pp ub uc bc ue be =
+--   mapM_ ppp (paths ub uc ue be bc)

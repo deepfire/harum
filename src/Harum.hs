@@ -1,25 +1,17 @@
-{-# OPTIONS_GHC -Wall -Wno-unticked-promoted-constructors -Wno-orphans #-}
+{-# OPTIONS_GHC -Wall -Wno-unticked-promoted-constructors -Wno-orphans -Wno-partial-type-signatures #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeInType #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE UnicodeSyntax #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# OPTIONS_GHC -Wno-partial-type-signatures #-}
+
+{-# OPTIONS_GHC -Wno-unused-imports #-}
 
 module Harum
 where
@@ -31,9 +23,6 @@ import           Data.Maybe
 import           Data.Monoid                  hiding (Last)
 import           Data.Text                           (Text)
 import qualified Data.Text                    as      T
-import qualified Data.Text.IO                 as      T
-import           Network.HTTP.Client.TLS
-import qualified Network.HTTP.Client          as      HTTP
 import           Prelude                      hiding (lines)
 import           Prelude.Unicode
 import           Servant.Client
@@ -46,7 +35,6 @@ import           Text.Printf
 import           Types
 import           Bittrex
 import           GenericClient
--- import           UI
 
 
 -- * A stab at analytics
@@ -54,61 +42,6 @@ import           GenericClient
 -- analyse'triangle ∷ Market a b → Market b c → Rate Median '(a, c)
 -- analyse'triangle left right =
 --   market'median left `compose'medians` market'median right
-
-
--- * HUD
-
-trade'hud ∷ Int → Trade → [Text]
-trade'hud depth (Trade m@Market{..} Book{..}) =
-  let Syms{..}     = syms m
-      info         = T.pack $ printf ". %-*.7f" (int 11) (fromRate mk'last)
-      pp'order Order{..}
-                   = T.pack $ printf "%-*s %*.7f" (int 14) (brief rate) (int 11) volume
-      asks'        = take depth (pp'order <$> asks)
-      bids'        = take depth (pp'order <$> bids)
-      width        = fromMaybe 22 $ (T.length <$> headMay asks')
-      head'left    = show s'base
-      head'right   = show s'market
-      header       = T.pack $ printf "%-*s%*s" (width `div` 2 + width `mod` 2) head'left (width `div` 2) head'right
-  in [    header ]
-     <>   reverse asks'
-     <> [ info ]
-     <>           bids'
-
-base'pairs, extra'pairs, hud'pairs ∷ [APair]
-base'pairs =
-  [ PA $ Pair Usdt Btc
-  , PA $ Pair Usdt Bcc
-  ]
-extra'pairs =
-  [
-    PA $ Pair Btc  Bcc
-  ]
-hud'pairs =
-  base'pairs <> extra'pairs
-
-hud'frame ∷ ClientM ()
-hud'frame = do
-  trades ← sequence [ get'trade 20 pa
-                    | PA pa ← hud'pairs ]
-  let huds      = trade'hud 10 <$> trades
-      hud'ws    = (maximum ∘ (T.length <$>)) <$> huds
-      hud'lines = transpose huds
-      hud       = [ T.concat ∘ intersperse "  │  "
-                    $ (uncurry justify <$> zip widths lines)
-                  | (widths, lines) ← zip (repeat hud'ws) hud'lines]
-      justify w s = T.pack $ printf "%-*s" w s
-  liftIO $ forM_ hud T.putStrLn
-
-run ∷ IO ()
-run = do
-  manager ← newTlsManagerWith tlsManagerSettings { HTTP.managerModifyRequest = (\r → pure r) }
-  let conn = ClientEnv manager bittrexURL
-  res     ← flip runClientM conn
-            hud'frame
-  case res of
-    Left err → putStrLn $ "Error: " <> show err
-    Right _  → pure ()
 
   -- xs ← handlerr $ getcurrencies
   -- forM_ xs $

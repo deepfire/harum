@@ -1,11 +1,6 @@
 {-# OPTIONS_GHC -Wall -Wno-unticked-promoted-constructors -Wno-orphans #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE UnicodeSyntax #-}
 
 module Bittrex
 where
@@ -18,8 +13,10 @@ import           Data.Monoid                         ((<>))
 import           Data.Proxy                          (Proxy(..))
 import           Data.Text                           (Text)
 import           Data.List                           (stripPrefix)
-import qualified Data.Text                    as      T
+import qualified Data.Text                        as T
 import           GHC.Generics                        (Generic, Rep)
+import           Network.HTTP.Client.TLS
+import qualified Network.HTTP.Client              as HTTP
 import           Prelude.Unicode
 import           Servant.API
 import           Servant.Client
@@ -33,6 +30,15 @@ import           Types
 -- | https://bittrex.com/api/{version}/{method}?param=value
 bittrexURL ∷  BaseUrl
 bittrexURL = (BaseUrl Https "bittrex.com" 443 "/api/v1.1")
+
+run ∷ ClientM a → IO ()
+run action = do
+  manager ← newTlsManagerWith tlsManagerSettings { HTTP.managerModifyRequest = (\r → pure r) }
+  let conn = ClientEnv manager bittrexURL
+  res ← flip runClientM conn action
+  case res of
+    Left err → putStrLn $ "Error: " <> show err
+    Right _  → pure ()
 
 type BittrexAPI =
           "public/getmarkets"
@@ -49,7 +55,6 @@ type BittrexAPI =
           :> Get '[JSON] (Response [DescMarketSummary])
      :<|> "public/getorderbook"
           :> QueryParam "market" Syms
-          :> QueryParam "depth"  Int
           :> QueryParam "type"   OrderBookType
           :> Get '[JSON] (Response  DescOrderBook)
      :<|> "public/getmarkethistory"

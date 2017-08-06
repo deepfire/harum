@@ -1,26 +1,22 @@
 {-# OPTIONS_GHC -Wall -Wno-unticked-promoted-constructors -Wno-orphans #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeInType #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE UnicodeSyntax #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module GenericClient
+  ( module Servant.Client
+    --
+  , handlerr
+  , get'book, get'market, get'trade
+  )
 where
 
 import           Control.Monad
@@ -40,9 +36,9 @@ handlerr action = flt <$> action
   where flt (Response False msg _) = errorT $ "Bittrex error: " <> msg
         flt (Response True  _   x) = x
 
-get'book ∷ Int → Market a b → ClientM (Book a b)
-get'book depth market = do
-  DescOrderBook{..} ← handlerr $ getorderbook (Just $ syms market) (Just depth) (Just OBBoth)
+get'book ∷ Market a b → ClientM (Book a b)
+get'book market = do
+  DescOrderBook{..} ← handlerr $ getorderbook (Just $ syms market) (Just OBBoth)
   let Pair sbid sask = pair market
       bids = [ Order { rate   = Rate BID sbid sask poRate
                      , volume = poQuantity }
@@ -64,8 +60,8 @@ get'market pa@(Pair base mkt) = do
       mk'last = Rate Last base mkt msLast
   pure Market{..}
 
-get'trade ∷ Int → Pair a b → ClientM Trade
-get'trade depth pa = do
+get'trade ∷ Pair a b → ClientM (Trade a b)
+get'trade pa = do
   market ← get'market pa
-  book   ← get'book depth market
+  book   ← get'book market
   pure Trade{..}

@@ -10,42 +10,130 @@ build-type:          Simple
 
 cabal-version:       >=1.10
 
--- library
-executable harum
+library
   hs-source-dirs:      src
   default-language:    Haskell2010
 
-  -- exposed-modules:
+  exposed-modules:
 
-  --                 Harum
+                  Types
+                  Bittrex
+                  GenericClient
+                  Harum
 
-  build-depends:       aeson
-                     , base >=4.8
+  build-depends:       base >=4.8
                      , base-unicode-symbols
-                     , brick
+                     , cabal-doctest
                      , containers >=0.5
-                     , data-default
-                     , either
+                     , doctest
                      , ghc-prim >=0.4
                      , hashable
+                     , safe
+                     , text
+                     , transformers
+                     , unordered-containers
+                     , zippers
+                     
+                     , aeson
+                     , either
                      , http-api-data
                      , http-client
                      , http-client-tls
                      , lens
                      , QuickCheck
-                     , random
-                     , safe
-                     , semigroupoids >= 5.0.0.3
-                     , semigroups >= 0.16.2.2
                      , servant
                      , servant-client
-                     , split
-                     , text
-                     , time
-                     , transformers
-                     , unordered-containers
-                     , vector
+
+                     , brick
+                     , classy-prelude
+                     , data-default
+                     , dependent-sum
+                     , fuzzy
+                     , libmpd
+                     , microlens
+                     , microlens-th
+                     , microlens-platform
+                     , safe-exceptions
+                     , template-haskell
+                     , text-zipper
                      , vty
 
+                     , semigroupoids
+                     , semigroups
+                     , split
+                     , time
+                     , vector
+
+  default-extensions:
+                     FlexibleContexts
+                   , FlexibleInstances
+                   , GADTs
+                   , OverloadedStrings
+                   , KindSignatures
+                   , LambdaCase
+                   , RecordWildCards
+                   , StandaloneDeriving
+                   , TypeOperators
+                   , UnicodeSyntax
+                   , ViewPatterns
+
+executable harum
+  hs-source-dirs:      .
+  default-language:    Haskell2010
+
+  main-is:             ui.hs
+
+  build-depends:       base >=4.8
+                     , base-unicode-symbols
+                     , cabal-doctest
+                     , containers >=0.5
+                     , doctest
+                     , ghc-prim >=0.4
+                     , hashable
+                     , safe
+                     , text
+                     , transformers
+                     , unordered-containers
+                     , zippers
+                     
+                     , aeson
+                     , either
+                     , http-api-data
+                     , http-client
+                     , http-client-tls
+                     , lens
+                     , QuickCheck
+                     , servant
+                     , servant-client
+
+                     , brick
+                     , classy-prelude
+                     , data-default
                      , dependent-sum
-                     , clock
+                     , fuzzy
+                     , libmpd
+                     , microlens
+                     , microlens-th
+                     , microlens-platform
+                     , safe-exceptions
+                     , template-haskell
+                     , vty
+
+                     , semigroupoids
+                     , semigroups
+                     , split
+                     , time
+                     , vector
+
+  default-extensions:
+                     FlexibleContexts
+                   , FlexibleInstances
+                   , GADTs
+                   , OverloadedStrings
+                   , KindSignatures
+                   , LambdaCase
+                   , RecordWildCards
+                   , StandaloneDeriving
+                   , TypeOperators
+                   , UnicodeSyntax
+                   , ViewPatterns

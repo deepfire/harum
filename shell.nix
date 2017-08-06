@@ -21,6 +21,7 @@ let
       # primitive = doJailbreak super.primitive;
       # syb       = doJailbreak super.syb;
       # vector    = doJailbreak super.vector;
+      zippers     = overGithub super.zippers "deepfire/zippers" "3724cde7ba89767b18a751d8c074e470370ecf87" "0rhmjyqjzni6725pq5vhpwlav6n2nbqjj9l3m7c7ba03yzvi2c8c" {};
     };
   };
 
@@ -30,7 +31,9 @@ let
             drv
             (old: {
               libraryHaskellDepends =
-                 [ pkgs.cabal-install pkgs.stack ghc.intero ];
+                 [ pkgs.cabal-install pkgs.stack ghc.intero ghc.mushu ];
+              executableHaskellDepends =
+                 old.executableHaskellDepends ++ [ pkgs.cabal-install pkgs.stack ghc.intero ghc.mushu ];
              });
   drv''   = pkgs.lib.overrideDerivation
             drv'.env

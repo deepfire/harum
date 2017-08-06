@@ -1,20 +1,13 @@
 {-# OPTIONS_GHC -Wall -Wno-unticked-promoted-constructors -Wno-orphans #-}
-{-# LANGUAGE GADTs #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE KindSignatures #-}
-{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE UnicodeSyntax #-}
 
 module Types
 where
 
 import           Data.Aeson                   hiding (pairs)
-import           Data.Char                           (toLower, toUpper)
+import           Data.Char                           (toUpper, toLower)
 import           Data.Foldable                       (asum)
 import           Data.Monoid                         ((<>))
 import           Data.Text                           (Text)
@@ -90,7 +83,7 @@ instance PP (Cu a) where
   pp = upperShowT
 
 cu'sym ∷ Cu a → Sym
-cu'sym = read . (toUpper <$>) . show
+cu'sym = read ∘ (toUpper <$>) ∘ show
 
 -- data ACu where
 --   ACu ∷ { fromACu ∷ Cu a } → ACu
@@ -184,11 +177,14 @@ data Book a b where
 
 -- * Trade
 --
-data Trade where
+-- WHY: this doesn't package a and b as existentials, because some upstreams can
+--      benefit from more precise types.
+data Trade a b where
   Trade ∷
     { market ∷ Market a b
     , book   ∷ Book   a b
-    } → Trade
+    } → Trade a b
+data A'Trade = ∀ a b. A'Trade (Trade a b)
 
 
 -- * Value computations

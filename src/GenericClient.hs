@@ -1,4 +1,5 @@
 {-# OPTIONS_GHC -Wall -Wno-unticked-promoted-constructors -Wno-orphans #-}
+{-# LANGUAGE FlexibleContexts, FlexibleInstances, GADTs, OverloadedStrings, PartialTypeSignatures, RecordWildCards, StandaloneDeriving, TypeOperators, UnicodeSyntax #-}
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
@@ -21,9 +22,12 @@ where
 
 import           Control.Monad
 import           Data.Monoid                  hiding (Last)
+import           Data.Singletons
+import qualified Debug.Trace                      as D
+import           GHC.Stack
 import           Prelude.Unicode
 import           Servant.Client
-import           Text.Printf
+import           Text.Printf                         (printf)
 
 
 -- * Local imports
@@ -31,14 +35,14 @@ import           Text.Printf
 import           Types
 import           Bittrex
 
-handlerr ∷ ClientM (Response a) → ClientM a
+handlerr ∷ HasCallStack ⇒ ClientM (Response a) → ClientM a
 handlerr action = flt <$> action
-  where flt (Response False msg _) = errorT $ "Bittrex error: " <> msg
-        flt (Response True  _   x) = x
+  where flt (Response True  _   (Just x)) = x
+        flt (Response _     msg _)        = errorT $ "Bittrex error: " <> msg
 
-get'book ∷ Market a b → ClientM (Book a b)
+get'book ∷ HasCallStack ⇒ (SingI a, SingI b) ⇒ Market a b → ClientM (Book a b)
 get'book market = do
-  DescOrderBook{..} ← handlerr $ getorderbook (Just $ syms market) (Just OBBoth)
+  DescOrderBook{..} ← handlerr $ getorderbook (Just ∘ A'Pair $ pair market) (Just OBBoth)
   let Pair sbid sask = pair market
       bids = [ Order { rate   = Rate BID sbid sask poRate
                      , volume = poQuantity }
@@ -48,11 +52,10 @@ get'book market = do
              | DescPosition{..} ← obsell ]
   pure Book{..}
 
-get'market ∷ Pair a b → ClientM (Market a b)
+get'market ∷ HasCallStack ⇒ (SingI a, SingI b) ⇒ Pair a b → ClientM (Market a b)
 get'market pa@(Pair base mkt) = do
-  let ss@Syms{..} = syms pa
-      name'wanted = pp   pa
-  [DescMarketSummary{..}] ← handlerr $ getmarketsummary $ Just ss
+  let name'wanted = pp pa
+  [DescMarketSummary{..}] ← handlerr $ getmarketsummary (Just ∘ A'Pair $ pa)
   unless (name'wanted ≡ msMarketName) $
     error $ printf "BTX inconsistency: expected %s, got %s" name'wanted msMarketName
   let mk'bid  = Rate BID  base mkt msBid
@@ -60,7 +63,7 @@ get'market pa@(Pair base mkt) = do
       mk'last = Rate Last base mkt msLast
   pure Market{..}
 
-get'trade ∷ Pair a b → ClientM (Trade a b)
+get'trade ∷ HasCallStack ⇒ (SingI a, SingI b) ⇒ Pair a b → ClientM (Trade a b)
 get'trade pa = do
   market ← get'market pa
   book   ← get'book market

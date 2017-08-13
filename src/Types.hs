@@ -1,6 +1,8 @@
 {-# OPTIONS_GHC -Wall -Wno-unticked-promoted-constructors -Wno-orphans #-}
+{-# LANGUAGE FlexibleContexts, FlexibleInstances, GADTs, OverloadedStrings, PartialTypeSignatures, RankNTypes, RecordWildCards, StandaloneDeriving, TypeOperators, TypeInType, UnicodeSyntax #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 
 module Types
@@ -11,10 +13,14 @@ import           Data.Char                           (toUpper, toLower)
 import           Data.Foldable                       (asum)
 import           Data.Monoid                         ((<>))
 import           Data.Text                           (Text)
-import qualified Data.Text                    as      T
+import qualified Data.Text                        as T
 import           GHC.Generics                        (Generic)
+import           GHC.Stack
 import           GHC.Types                           (Symbol, Type)
 import           Prelude.Unicode
+import           Data.Singletons
+import           Data.Singletons.TH
+import qualified System.Logger                    as Log
 import           Text.Printf                         (printf)
 
 
@@ -69,67 +75,42 @@ data Sym
   -- | 1ST
   deriving (Bounded, Enum, Generic, Show, Read)
 
-data Cu (a ∷ Sym) where
-  Usdt ∷ Cu USDT
-  Btc  ∷ Cu BTC
-  Bcc  ∷ Cu BCC
-  Eth  ∷ Cu ETH
-  Etc  ∷ Cu ETC
-  Zec  ∷ Cu ZEC
-  Ans  ∷ Cu ANS
-  Dash ∷ Cu DASH
-deriving instance Show (Cu a)
-instance PP (Cu a) where
-  pp = upperShowT
+$(genSingletons [''Sym])
 
-cu'sym ∷ Cu a → Sym
-cu'sym = read ∘ (toUpper <$>) ∘ show
-
--- data ACu where
---   ACu ∷ { fromACu ∷ Cu a } → ACu
-
-data Syms where
-  Syms ∷
-    { s'base   ∷ Sym
-    , s'market ∷ Sym
-    } → Syms
-  deriving (Generic, Show)
-instance PP Syms where
-  pp (Syms a b) = showT a <> "-" <> showT b
+deriving instance Show (SSym a)
+instance PP (SSym a) where
+  pp = T.pack ∘ drop 1 ∘ upperShow
 
 data Pair a b where
   Pair ∷
-    { p'base   ∷ Cu a
-    , p'market ∷ Cu b
+    { p'base   ∷ SSym a
+    , p'market ∷ SSym b
     } → Pair a b
   deriving (Generic, Show)
 instance PP (Pair a b) where
-  pp (Pair a b) = upperShowT a <> "-" <> upperShowT b
+  pp (Pair a b) = pp a <> "-" <> pp b
 
 class HasPair (p ∷ Type) where
   type family BidSym p ∷ Sym
   type family AskSym p ∷ Sym
-  syms  ∷ p → Syms
   pair  ∷ p → Pair (BidSym p) (AskSym p)
 instance HasPair (Pair a b) where
   type BidSym (Pair a b) = a
   type AskSym (Pair a b) = b
-  syms (Pair a b) = Syms (cu'sym a) (cu'sym b)
   pair = id
 
-data APair where
-  PA ∷ Pair a b → APair
-instance PP APair where
-  pp (PA p) = pp p
+data A'Pair where
+  A'Pair ∷ (SingI a, SingI b) ⇒ Pair a b → A'Pair
+instance PP A'Pair where
+  pp (A'Pair p) = pp p
 
 
 data Rate (k ∷ Direction) t where
-  Rate ∷ Dir k → Cu a → Cu b → Double → Rate k '(a, b)
+  Rate ∷ (SingI a, SingI b) ⇒ Dir k → SSym a → SSym b → Double → Rate k '(a, b)
 deriving instance Show (Rate k a)
 instance HasPair (Rate k '(a, b)) where
   type BidSym (Rate k '(a, b)) = a
   type AskSym (Rate k '(a, b)) = b
-  syms  (Rate _ a b _) = Syms (cu'sym a) (cu'sym b)
   pair  (Rate _ a b _) = Pair a b
 rate'char ∷ Dir k → Char
 rate'char BID    = '>'
@@ -140,39 +121,41 @@ instance PP (Rate k '(a, b)) where
   pp    (Rate d a b r) = T.pack $ printf "%s%c%s %-5.7f" (show a) (rate'char d) (show b) r
 
 data Market (a ∷ Sym) (b ∷ Sym) where
-  Market ∷
+  Market ∷ (SingI a, SingI b) ⇒
     { mk'bid  ∷ Rate Bid '(a, b)
     , mk'ask  ∷ Rate Ask '(a, b)
     , mk'last ∷ Rate (X "Last") '(a, b)
     } → Market a b
 deriving instance Show (Market a b)
 instance HasPair (Market a b) where
-  type BidSym (Market a _) = a
-  type AskSym (Market _ b) = b
+  type BidSym (Market a b) = a
+  type AskSym (Market a b) = b
   pair  = pair ∘ mk'bid
-  syms  = syms ∘ mk'bid
 
 
 -- * Order book
 --
 data Order (k ∷ Direction) a b where
-  Order ∷
+  Order ∷ (SingI a, SingI b) ⇒
     { rate   ∷ Rate k '(a, b)
     , volume ∷ Double
     } → Order k a b
-    deriving Show
+deriving instance Show (Order k a b)
 instance HasPair (Order k a b) where
-  type BidSym (Order k a _) = a
-  type AskSym (Order k _ b) = b
+  type BidSym (Order k a b) = a
+  type AskSym (Order k a b) = b
   pair  = pair ∘ rate
-  syms  = syms ∘ rate
 
-data Book a b where
-  Book ∷
+data Book (a ∷ Sym) (b ∷ Sym) where
+  Book ∷ (SingI a, SingI b) ⇒
     { bids ∷ [Order Bid a b]
     , asks ∷ [Order Ask a b]
     } → Book a b
-    deriving Show
+deriving instance Show (Book a b)
+instance HasPair (Book (a ∷ Sym) (b ∷ Sym)) where
+  type BidSym (Book a b) = a
+  type AskSym (Book a b) = b
+  pair (Book _ _)  = Pair sing sing
 
 
 -- * Trade
@@ -184,13 +167,17 @@ data Trade a b where
     { market ∷ Market a b
     , book   ∷ Book   a b
     } → Trade a b
-data A'Trade = ∀ a b. A'Trade (Trade a b)
+data A'Trade = ∀ a b. (SingI a, SingI b) ⇒ A'Trade (Trade a b)
+instance HasPair (Trade a b) where
+  type BidSym (Trade a b) = a
+  type AskSym (Trade a b) = b
+  pair Trade{..} = pair market
 
 
 -- * Value computations
 --
 data Val a where
-  Val ∷ Cu a → Double → Val a
+  Val ∷ SSym a → Double → Val a
 deriving instance Show (Val a)
 
 
@@ -211,18 +198,26 @@ inverse  (Rate k a b r) = Rate k b a (1 / r)
 -- compose'medians  (Rate _ a _ ab) (Rate _ _ c bc) = Rate MedianR a c (ab * bc)
 
 
+-- * System parametrisation
+--
+data Options where
+  Options ∷
+    { o'logging ∷ Log.Settings
+    } → Options
+
+
 -- * Utils
 --
-showT ∷ Show a ⇒ a → Text
-showT = T.pack ∘ show
+lowerShow,  upperShow ∷ Show a ⇒ a → String
+lowerShow  = (toLower <$>) ∘ show
+upperShow  = (toUpper <$>) ∘ show
 
-lowerShowT ∷ Show a ⇒ a → Text
-lowerShowT = T.pack ∘ (toLower <$>) ∘ show
+lowerShowT, upperShowT, showT ∷ Show a ⇒ a → Text
+lowerShowT = T.pack ∘ lowerShow
+upperShowT = T.pack ∘ upperShow
+showT      = T.pack ∘ show
 
-upperShowT ∷ Show a ⇒ a → Text
-upperShowT = T.pack ∘ (toUpper <$>) ∘ show
-
-errorT ∷ Text → a
+errorT ∷ HasCallStack ⇒ Text → a
 errorT = error ∘ T.unpack
 
 -- * These turn (1 ∷ Int) into (int 1).

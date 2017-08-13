@@ -4,9 +4,9 @@
 , http-api-data, http-client, http-client-tls, lens, libmpd
 , microlens, microlens-platform, microlens-th, QuickCheck, safe
 , safe-exceptions, semigroupoids, semigroups, servant
-, servant-client, split, stdenv, template-haskell, text
-, text-zipper, time, transformers, unordered-containers, vector
-, vty, zippers
+, servant-client, singletons, split, stdenv, template-haskell, text
+, text-zipper, time, tinylog, transformers, unordered-containers
+, vector, vty, zippers
 }:
 mkDerivation {
   pname = "harum";
@@ -20,8 +20,8 @@ mkDerivation {
     hashable http-api-data http-client http-client-tls lens libmpd
     microlens microlens-platform microlens-th QuickCheck safe
     safe-exceptions semigroupoids semigroups servant servant-client
-    split template-haskell text text-zipper time transformers
-    unordered-containers vector vty zippers
+    singletons split template-haskell text text-zipper time tinylog
+    transformers unordered-containers vector vty zippers
   ];
   executableHaskellDepends = [
     aeson base base-unicode-symbols brick cabal-doctest classy-prelude
@@ -29,8 +29,8 @@ mkDerivation {
     hashable http-api-data http-client http-client-tls lens libmpd
     microlens microlens-platform microlens-th QuickCheck safe
     safe-exceptions semigroupoids semigroups servant servant-client
-    split template-haskell text time transformers unordered-containers
-    vector vty zippers
+    singletons split template-haskell text time tinylog transformers
+    unordered-containers vector vty zippers
   ];
   description = "Type-safe market computation thing";
   license = stdenv.lib.licenses.agpl3;

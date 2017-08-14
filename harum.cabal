@@ -10,30 +10,35 @@ build-type:          Simple
 
 cabal-version:       >=1.10
 
-library
+executable harum
   hs-source-dirs:      src
+  main-is:             ui.hs
+  ghc-options:         -threaded
   default-language:    Haskell2010
 
-  exposed-modules:
-
-                  Types
-                  Bittrex
-                  GenericClient
-                  Harum
+  other-modules:
+                Types
+              , Bittrex
+              , GenericClient
+              , Harum
 
   build-depends:       base >=4.8
                      , base-unicode-symbols
+                     , bytestring
                      , cabal-doctest
                      , containers >=0.5
                      , doctest
                      , ghc-prim >=0.4
                      , hashable
+                     , hourglass
                      , safe
                      , singletons
                      , text
                      , tinylog
                      , transformers
                      , unordered-containers
+                     , websockets
+                     , wuss
                      , zippers
                      
                      , aeson
@@ -58,70 +63,6 @@ library
                      , safe-exceptions
                      , template-haskell
                      , text-zipper
-                     , vty
-
-                     , semigroupoids
-                     , semigroups
-                     , split
-                     , time
-                     , vector
-
-  default-extensions:
-                     FlexibleContexts
-                   , FlexibleInstances
-                   , GADTs
-                   , OverloadedStrings
-                   , KindSignatures
-                   , LambdaCase
-                   , RecordWildCards
-                   , StandaloneDeriving
-                   , TypeOperators
-                   , UnicodeSyntax
-                   , ViewPatterns
-
-executable harum
-  hs-source-dirs:      .
-  default-language:    Haskell2010
-  ghc-options:         -threaded
-  main-is:             ui.hs
-
-  build-depends:       harum
-                     , base >=4.8
-                     , base-unicode-symbols
-                     , cabal-doctest
-                     , containers >=0.5
-                     , doctest
-                     , ghc-prim >=0.4
-                     , hashable
-                     , safe
-                     , text
-                     , tinylog
-                     , transformers
-                     , unordered-containers
-                     , zippers
-                     
-                     , aeson
-                     , either
-                     , http-api-data
-                     , http-client
-                     , http-client-tls
-                     , lens
-                     , QuickCheck
-                     , servant
-                     , servant-client
-
-                     , brick
-                     , classy-prelude
-                     , data-default
-                     , dependent-sum
-                     , fuzzy
-                     , libmpd
-                     , microlens
-                     , microlens-th
-                     , microlens-platform
-                     , safe-exceptions
-                     , singletons
-                     , template-haskell
                      , vty
 
                      , semigroupoids

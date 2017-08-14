@@ -7,10 +7,11 @@ module Bittrex
 where
 
 import           Control.Arrow                       ((>>>))
-import           Control.Monad.Trans.Class           (lift)
-import           Control.Monad.Trans.Reader
+-- import           Control.Monad.Trans.Class           (lift)
+-- import           Control.Monad.Trans.Reader
 import           Data.Aeson                   hiding (pairs)
 import           Data.Aeson.Types             hiding (Options, Pair, pairs)
+-- import qualified Data.ByteString                  as BS
 import           Data.Function                       ((&))
 import           Data.Maybe                          (fromMaybe)
 import           Data.Monoid                         ((<>))

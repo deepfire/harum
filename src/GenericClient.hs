@@ -23,7 +23,7 @@ where
 import           Control.Monad
 import           Data.Monoid                  hiding (Last)
 import           Data.Singletons
-import qualified Debug.Trace                      as D
+-- import qualified Debug.Trace                      as D
 import           GHC.Stack
 import           Prelude.Unicode
 import           Servant.Client

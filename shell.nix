@@ -44,7 +44,7 @@ let
   drv'    = pkgs.haskell.lib.overrideCabal
             drv
             (old: {
-              libraryHaskellDepends    = old.libraryHaskellDepends    ++ tools ++ extras;
+              # libraryHaskellDepends    = old.libraryHaskellDepends    ++ tools ++ extras;
               executableHaskellDepends = old.executableHaskellDepends ++ tools ++ extras;
              });
   drv''   = pkgs.lib.overrideDerivation

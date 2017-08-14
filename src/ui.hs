@@ -1,4 +1,4 @@
-{-# OPTIONS_GHC -Wall -fno-warn-unused-do-bind -Wno-unticked-promoted-constructors #-}
+{-# OPTIONS_GHC -Wall -fno-warn-unused-do-bind -Wno-unticked-promoted-constructors -Wno-orphans -Wno-unused-top-binds #-}
 {-# LANGUAGE FlexibleContexts, FlexibleInstances, GADTs, OverloadedStrings, PartialTypeSignatures, RecordWildCards, StandaloneDeriving, TypeOperators, UnicodeSyntax #-}
 {-# LANGUAGE DataKinds, DeriveFunctor, DeriveTraversable, EmptyCase, NoMonomorphismRestriction, RankNTypes #-}
 
@@ -6,25 +6,25 @@ module Main (main)
 where
 
 import qualified Brick.Main                       as M
-import qualified Brick.Types                      as T
+-- import qualified Brick.Types                      as T
 import qualified Brick.Widgets.Border             as W
-import qualified Brick.Widgets.Center             as W
+-- import qualified Brick.Widgets.Center             as W
 import qualified Brick.Widgets.Core               as W
-import qualified Brick.Widgets.Edit               as W
+-- import qualified Brick.Widgets.Edit               as W
 import qualified Brick.Widgets.List               as W
-import qualified Brick.AttrMap                    as A
+-- import qualified Brick.AttrMap                    as A
 import           Brick.AttrMap                       (AttrMap, AttrName, attrMap)
 import           Brick.BChan                         (BChan, newBChan, writeBChan)
-import           Brick.Widgets.Core
+-- import           Brick.Widgets.Core
 import           Brick.Widgets.List                  (List)
 import           Brick.Types                         (Widget, EventM, Next, BrickEvent(..))
-import           Brick.Util                          (on, fg, bg)
+import           Brick.Util                          (on, fg)
 import           Control.Monad.IO.Class
 import           Control.Applicative
-import           Control.Monad                       (forM_, void)
-import           Control.Lens                        ((<&>))
+import           Control.Monad                       (forM_)
+-- import           Control.Lens                        ((<&>))
 import           Data.Foldable
-import           Data.Function                       ((&))
+-- import           Data.Function                       ((&))
 import           Data.List                    hiding (lines)
 import qualified Data.Text                        as T
 import qualified Data.Text.IO                     as T
@@ -33,13 +33,12 @@ import           Data.Maybe
 import           Data.Monoid                         ((<>))
 import           Data.Traversable
 import qualified Data.Vector                      as V
-import qualified Debug.Trace                      as D
-import qualified Graphics.Text.Width              as TW
-import qualified Graphics.Vty                     as V
+-- import qualified Debug.Trace                      as D
+-- import qualified Graphics.Text.Width              as TW
+-- import qualified Graphics.Vty                     as V
 import           Prelude                      hiding (lines)
 import           Prelude.Unicode
 import           Safe                                (headMay)
-import           System.Environment                  (getArgs)
 import           Text.Printf                         (printf)
 
 
@@ -49,9 +48,9 @@ import qualified Graphics.Vty                     as Vty
 -- * Local imports
 --
 import           Types
-import           GenericClient
-import           Harum
 import qualified Bittrex                          as Bittrex
+import           GenericClient
+-- import           Harum
 
 
 -- * HUD
@@ -87,7 +86,7 @@ hud'frame = do
   liftIO $ forM_ hud T.putStrLn
 
 
-listAttrName :: AttrName
+listAttrName, listSelAttrName, activeColAttrName, selActiveColAttrName :: AttrName
 listAttrName = W.listAttr <> "custom"
 listSelAttrName = W.listSelectedAttr <> "custom-selected"
 activeColAttrName = listAttrName <> "active-column"
@@ -134,13 +133,13 @@ data TradeState a b = TradeState
 --      variables for its content.
 data A'TradeState = ∀ a b. A'TradeState (TradeState a b)
 
-state'of'trade ∷ Trade a b → TradeState a b
-state'of'trade trade@(Trade market book) =
+state'of'trade ∷ Int → Trade a b → TradeState a b
+state'of'trade depth trade@(Trade market book) =
   let p'name = pp $ pair market
   in TradeState
      { _trade       = trade
-     , _listAsks    = W.list (UIName $ "asks-" <> p'name) (V.fromList ∘ reverse ∘ take 15 ∘ asks $ book) 1
-     , _listBids    = W.list (UIName $ "bids-" <> p'name) (V.fromList ∘ id      ∘ take 15 ∘ bids $ book) 1
+     , _listAsks    = W.list (UIName $ "asks-" <> p'name) (V.fromList ∘ reverse ∘ take depth ∘ asks $ book) 1
+     , _listBids    = W.list (UIName $ "bids-" <> p'name) (V.fromList ∘ id      ∘ take depth ∘ bids $ book) 1
      , _orderFilter = Nothing
      }
 
@@ -164,7 +163,7 @@ to'right x@(Zipper _ _ []) = x
 to'right  (Zipper xs z (z':ys)) = Zipper (z:xs) z' ys
 
 rezip ∷ Zipper a → [a]
-rezip Zipper{..} = lefts <> [this] <> rights
+rezip Zipper{..} = reverse lefts <> [this] <> rights
 
 data TopIx = HelpScreen | TradeScreen
 type TradeStates = Zipper A'TradeState
@@ -180,14 +179,14 @@ initial'state []       = error $ printf "No wanna trade?  Why come?"
 initial'state trades   = AppState
   { _screen            = TradeScreen
   , _tradestates       = to'right $
-                         rootZ [ A'TradeState $ state'of'trade trade
+                         rootZ [ A'TradeState $ state'of'trade 30 trade
                                | A'Trade trade ← trades ] -- Painting: existential shovel.
   , _status            = Connected
   }
 
 update'book ∷ HEv → AppState → NextState UIName
 update'book (A'BookRefresh b) z =
-  let pa = pair b
+  let _pa = pair b
   in (⊥)
 
 
@@ -197,8 +196,11 @@ appEvent ∷ AppState → BrickEvent UIName HEv → NextState UIName
 appEvent state (AppEvent b@(A'BookRefresh _)) = update'book b state
 -- appEvent state (AppEvent (OrderRefresh o)) = update'orders  state
 -- appEvent state (AppEvent BalanceRefresh)   = update'balance state
-appEvent state vtyEvent = (⊥)
-  -- case state of
+appEvent state@AppState{..} (VtyEvent x)
+  | (Vty.EvKey Vty.KLeft [])  ← x = M.continue $ state { _tradestates = to'left  _tradestates }
+  | (Vty.EvKey Vty.KRight []) ← x = M.continue $ state { _tradestates = to'right _tradestates }
+  | (Vty.EvKey Vty.KEsc  [])  ← x = M.halt state
+  | otherwise                     = M.continue state
   --   True → handleViewEvent state vtyEvent
   --   False → case vtyEvent of
   --     VtyEvent (Vty.EvKey (Vty.KChar '?') []) → M.continue $ state & helpActive %~ not
@@ -224,11 +226,11 @@ draw'tradestate focused (A'TradeState TradeState{..}) = W.vBox
     render'list xs = W.renderList (\_sel x → W.txt $ pp x) focused xs
 
 draw'tradestates ∷ TradeStates → [Widget UIName]
-draw'tradestates xs@(Zipper lefts this rights) =  (:[]) ∘ W.hBox
+draw'tradestates (Zipper lefts this rights) =  (:[]) ∘ W.hBox
   $  intersperse W.vBorder
-  $  (draw'tradestate False <$> lefts)
+  $  (draw'tradestate False <$> reverse lefts)
   <> [draw'tradestate True this]
-  <> (draw'tradestate False <$> rights)
+  <> (draw'tradestate False <$> id     rights)
 
 drawUI ∷ AppState → [Widget UIName]
 drawUI AppState{..} =
@@ -246,10 +248,57 @@ app = M.App
   }
 
 main ∷ IO ()
-main = Bittrex.run $ do
+main = Bittrex.runHTTP $ do
   event'chan ← liftIO $ newBChan 10
   trades ← sequence [ A'Trade <$> get'trade p
                     | A'Pair p ← default'pairs ]
   liftIO $ M.customMain (Vty.mkVty Vty.defaultConfig)
     (Just event'chan) app (initial'state trades)
   pure ()
+
+-- *
+-- → https://bittrex.com/Market/Index?MarketName=BTC-BCC
+-- ← Set-Cookie:__cfduid=d2bcf3255b9cd2e981bed73dc7d452b611502627404
+--    <link href="/Content/vendor/cryptocoins/cryptocoins.css" rel="stylesheet" />
+--    <link href="/content/tpcore?v=QJ3wNu5EQ6UlCjsTJdbaOLSWB_y7J7AB8BJJdZDroBo1" rel="stylesheet"/>
+--    <link href="/content/datatables?v=V8Z9lEDy7UIqnRXRLbTNYwvRqsSCW24JRZPrC0xpwOw1" rel="stylesheet"/>
+--    <link href="/content/bcore?v=Mu4k6pOKqoJbnH1qGHzl2Wzi9spro5O2h14vkAd5aKo1" rel="stylesheet"/>
+--    <script src="/bundles/modernizr?v=inCVuEFe6J4Q07A0AcRsbJic_UE5MwpRMNGcOtk94TE1"></script>
+--    <link href="/content/layout?v=c6hTevJcFMkORDVQ88_dTxsP2m39Wu8rHyeychn4N-U1" rel="stylesheet"/>
+--    <link href="/content/market?v=IopVw-D8NVFHDhvl-sjFse8c1bQo0BT1WUvm1pfi6Zg1" rel="stylesheet"/>
+-- → https://bittrex.com/content/tpcore?v=QJ3wNu5EQ6UlCjsTJdbaOLSWB_y7J7AB8BJJdZDroBo1
+-- * 
+-- https://socket.bittrex.com/signalr/negotiate?clientProtocol=1.5&connectionData=%5B%7B%22name%22%3A%22corehub%22%7D%5D&_=1502626465643
+-- - signalr/negotiate
+-- - clientProtocol=1.5
+-- - connectionData=%5B%7B%22name%22%3A%22corehub%22%7D%5D
+-- - _=1502626465643
+-- ← {"Url":"/signalr"
+--   ,"ConnectionToken":"C9UHW7gWnm4J32xpZTM2py1QT0LG449qhj0PQkRTt3/UlvPgx3s1z0NpgkqQT0uIPcPvZOF/lNpFLDtDPdoK5WMQuPcsEkDewzPBpfeDeRaAGITo"
+--   ,"ConnectionId":"9e62c072-f51b-41ed-a927-a556db9d35a5"
+--   ,"KeepAliveTimeout":20.0, "DisconnectTimeout":30.0, "ConnectionTimeout":110.0,"TransportConnectTimeout":5.0,"LongPollDelay":0.0
+--   ,"TryWebSockets":true,"ProtocolVersion":"1.5"}
+-- ← {"Url":"/signalr"
+--   ,"ConnectionToken":"9Mdp5sUm0Z6+f9a+X1SnH8K1okN1GT3H4/s0FfH31bM7f1iVpWT9xUsnWh3UBFO+R9FPxKy4bbPVA7Gkbeb5L+sIZGE82ngEVITlHv8dncFwTRFs"
+--   ,"ConnectionId":"614a6f3f-6fc4-49b1-b6a7-02fac8e688dc"
+--   ,"KeepAliveTimeout":20.0, "DisconnectTimeout":30.0, "ConnectionTimeout":110.0,"TransportConnectTimeout":5.0,"LongPollDelay":0.0
+--   ,"TryWebSockets":true,"ProtocolVersion":"1.5"}
+-- https://socket.bittrex.com/signalr/start?transport=webSockets&clientProtocol=1.5&connectionToken=9sFtmdh6rzbX3ZP4%2F%2B7zPgCa5OTrgL9AKq4loyo03fvG5ZWoGb3bFJe3XxXYqhZYXzHdKEPlG%2B1ij4Im1HDlYyH%2BpsjmSTzFk6e%2FQPY%2BiBQ3z36j&connectionData=%5B%7B%22name%22%3A%22corehub%22%7D%5D&_=1502626465644
+-- - signalr/start
+-- - transport=webSockets
+-- - clientProtocol=1.5
+-- - connectionToken=9sFtmdh6rzbX3ZP4%2F%2B7zPgCa5OTrgL9AKq4loyo03fvG5ZWoGb3bFJe3XxXYqhZYXzHdKEPlG%2B1ij4Im1HDlYyH%2BpsjmSTzFk6e%2FQPY%2BiBQ3z36j
+-- - connectionData=%5B%7B%22name%22%3A%22corehub%22%7D%5D
+-- - _=1502626465644
+-- wss://socket.bittrex.com/signalr/connect?transport=webSockets&clientProtocol=1.5&connectionToken=9sFtmdh6rzbX3ZP4%2F%2B7zPgCa5OTrgL9AKq4loyo03fvG5ZWoGb3bFJe3XxXYqhZYXzHdKEPlG%2B1ij4Im1HDlYyH%2BpsjmSTzFk6e%2FQPY%2BiBQ3z36j&connectionData=%5B%7B%22name%22%3A%22corehub%22%7D%5D&tid=6
+-- - signalr/connect
+-- - transport=webSockets
+-- - clientProtocol=1.5
+-- - connectionToken=9sFtmdh6rzbX3ZP4%2F%2B7zPgCa5OTrgL9AKq4loyo03fvG5ZWoGb3bFJe3XxXYqhZYXzHdKEPlG%2B1ij4Im1HDlYyH%2BpsjmSTzFk6e%2FQPY%2BiBQ3z36j
+-- - connectionData=%5B%7B%22name%22%3A%22corehub%22%7D%5D
+-- - tid=6
+--
+-- *
+-- /Api/v2.0/auth/market/GetOrderHistory
+-- /Api/v2.0/pub/currencies/GetBTCPrice
+-- /api/v2.0/pub/Markets/GetMarketSummaries

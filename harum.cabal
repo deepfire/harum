@@ -31,6 +31,7 @@ executable harum
                      , ghc-prim >=0.4
                      , hashable
                      , hourglass
+                     , monad-control
                      , safe
                      , singletons
                      , text

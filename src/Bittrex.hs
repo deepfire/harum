@@ -1,32 +1,43 @@
 {-# OPTIONS_GHC -Wall -Wno-unticked-promoted-constructors -Wno-orphans #-}
-{-# LANGUAGE FlexibleContexts, FlexibleInstances, GADTs, OverloadedStrings, PartialTypeSignatures, RecordWildCards, ScopedTypeVariables, StandaloneDeriving, TypeOperators, UnicodeSyntax #-}
-{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts, FlexibleInstances, GADTs, GeneralizedNewtypeDeriving, OverloadedStrings, PartialTypeSignatures, RecordWildCards, ScopedTypeVariables, StandaloneDeriving, TypeOperators, UnicodeSyntax #-}
+{-# LANGUAGE DataKinds, KindSignatures #-}
 {-# LANGUAGE DeriveGeneric #-}
 
 module Bittrex
 where
 
 import           Control.Arrow                       ((>>>))
--- import           Control.Monad.Trans.Class           (lift)
--- import           Control.Monad.Trans.Reader
+import           Control.Monad                       (unless, void)
+import           Control.Monad.IO.Class
+import           Control.Monad.Trans.Control      as CMTC
+import qualified Data.Aeson                       as AE
 import           Data.Aeson                   hiding (pairs)
 import           Data.Aeson.Types             hiding (Options, Pair, pairs)
+import qualified Data.ByteString.Lazy             as BL
 -- import qualified Data.ByteString                  as BS
+import           Data.Char                           (toLower)
 import           Data.Function                       ((&))
 import           Data.Maybe                          (fromMaybe)
 import           Data.Monoid                         ((<>))
 import           Data.Proxy                          (Proxy(..))
+import           Data.String
 import           Data.Text                           (Text)
 import           Data.List                           (stripPrefix)
 import qualified Data.Text                        as T
+import qualified Data.Text.Encoding               as T
 import           GHC.Generics                        (Generic, Rep)
 import           GHC.Stack
 import           Network.HTTP.Client.TLS
 import qualified Network.HTTP.Client              as HTTP
+import qualified Network.WebSockets               as WS
 import           Prelude.Unicode
 import           Servant.API
 import           Servant.Client
 import qualified System.Logger                    as Log
+import           Text.Printf                         (printf)
+import           Time.System
+import           Time.Types
+import qualified Wuss                             as WS
 
 
 -- * Local imports
@@ -35,56 +46,163 @@ import           Types
 
 
 -- | https://bittrex.com/api/{version}/{method}?param=value
-bittrexURL ∷  BaseUrl
-bittrexURL = (BaseUrl Https "bittrex.com" 443 "/api/v1.1")
+bittrexHTTPURL, bittrexSignalrURL ∷  BaseUrl
+bittrexHTTPURL    = (BaseUrl Https "bittrex.com"        443 "/api/v1.1")
+bittrexSignalrURL = (BaseUrl Https "socket.bittrex.com" 443 "/signalr")
+options    ∷ Options
+options    = Options $ Log.defSettings & Log.setLogLevel Log.Trace
 
-options ∷ Options
-options = Options $ Log.defSettings
-                  & Log.setLogLevel Log.Trace
+toJSONLowerStrip ∷ (Generic a, GToJSON Zero (Rep a)) ⇒ Int → a → Value
+toJSONLowerStrip n = genericToJSON $ defaultOptions { fieldLabelModifier = map toLower . drop n }
 
-trace ∷ Bool
-trace = True
+fromJSONStrip ∷ (Generic a, AE.GFromJSON AE.Zero (Rep a)) ⇒ Int → Value → Parser a
+fromJSONStrip n = AE.genericParseJSON (AE.defaultOptions { fieldLabelModifier = drop n })
 
-check ∷ Text → IO ()
-check uri = do
+newtype SignalrHub = SignalrHub { fromSH ∷ Text } deriving (Generic, IsString, Show, ToJSON)
+data CDE
+  =  CDE
+     { cdName ∷ SignalrHub
+     } deriving (Generic, Show)
+instance ToJSON CDE where toJSON = toJSONLowerStrip 2
+instance ToHttpApiData [CDE] where
+  toUrlPiece   = T.decodeUtf8 ∘ BL.toStrict ∘ AE.encode
+  toQueryParam = T.decodeUtf8 ∘ BL.toStrict ∘ AE.encode
+
+newtype ConnectionToken = ConnectionToken { fromCT ∷ Text } deriving (Eq, FromJSON, ToJSON, Show, ToHttpApiData, IsString)
+
+type BittrexSignalr =
+          "negotiate"
+          :> QueryParam "clientProtocol"  Text
+          :> QueryParam "connectionData"  [CDE]
+          :> QueryParam "_"               Integer
+          :> Get '[JSON] NegotiateR
+     :<|> "start"
+          :> QueryParam "transport"       Text
+          :> QueryParam "clientProtocol"  Text
+          :> QueryParam "connectionToken" ConnectionToken
+          :> QueryParam "connectionData"  [CDE]
+          :> QueryParam "_"               Integer
+          :> Get '[JSON] StartR
+
+data NegotiateR where
+  NegotiateR ∷
+    { rnUrl ∷ Text
+    , rnConnectionToken ∷ ConnectionToken -- "827mUg7d5uEvxNY85ggM8FKArVDowHTNtL5+4BfpTkVIL3TpvXoVeSz25uDcqwSsEywLOPXdod2BhRgsuBMRpGNmgATS76CWoZjSuisXVKzIVDEg"
+    , rnConnectionId ∷ Text -- "0b4dc066-69cb-4685-b26d-0e4968d1a629"
+    , rnKeepAliveTimeout ∷ Float
+    , rnDisconnectTimeout ∷ Float
+    , rnConnectionTimeout ∷ Float
+    , rnTryWebSockets ∷ Bool
+    , rnProtocolVersion ∷ Text
+    , rnTransportConnectTimeout ∷ Float
+    , rnLongPollDelay ∷ Float
+    } → NegotiateR
+    deriving (Generic, Show)
+instance FromJSON NegotiateR where parseJSON = fromJSONStrip 2
+
+data StartR where
+  StartR ∷
+    { rcResponse ∷ Text
+    } → StartR
+    deriving (Generic, Show)
+instance FromJSON StartR where parseJSON = fromJSONStrip 2
+
+bittrexSignalr ∷ Proxy BittrexSignalr
+bittrexSignalr = Proxy
+negotiate, start ∷ _
+negotiate           :<|>
+  start
+  =
+  client bittrexSignalr
+
+-- withFile :: FilePath -> Int -> (String -> IO r) -> IO r
+-- withFile = (⊥)
+-- withFileLifted' :: (Monad (t IO), MonadTransControl t) => FilePath -> Int -> (String -> t IO r) -> t IO r
+-- withFileLifted' file mode action = liftWith ((\run -> withFile file mode (run . action))∷_) >>= restoreT . return
+
+
+step0 ∷ IO NegotiateR
+step0 = runSignalr $ do
+  (Elapsed unixTime) ← liftIO timeCurrent
+  let cdata    = [CDE { cdName = "corehub" }]
+      protoVer = "1.5"
+  n@NegotiateR{..} ← negotiate
+    (Just protoVer) (Just cdata) (Just $ fromIntegral unixTime)
+  (Elapsed unixTime') ← liftIO timeCurrent
+  -- unless (rcResponse ≡ "started") $
+  --   errorT $ "Remote response != 'started', but is: '" <> rcResponse <> "'"
+  let wss'opts = WS.defaultConnectionOptions
+      wss'ep   = printf "/signalr/connect?transport=webSockets&clientProtocol=%s&connectionToken=%s&connectionData=%s&tid=1"
+                 protoVer (T.unpack $ fromCT rnConnectionToken) (T.decodeUtf8 $ BL.toStrict $ AE.encode cdata)
+  void ∘ CMTC.restoreM ∘ return =<< CMTC.liftBaseWith
+    (\run →
+       WS.runSecureClientWith "socket.bittrex.com" 443 wss'ep wss'opts [] $
+       \connection →
+         let loop = do
+               x ← WS.receive connection
+               putStrLn $ show x
+               loop
+         in do
+           r ← run $ start
+               (Just "webSockets") (Just protoVer) (Just rnConnectionToken) (Just cdata) (Just $ fromIntegral unixTime')
+           case r of
+             Right StartR{..} → loop
+             Left err → errorT $ showT err)
+  pure n
+-- wss://socket.bittrex.com/signalr/connect?transport=webSockets&clientProtocol=1.5&connectionToken=9sFtmdh6rzbX3ZP4%2F%2B7zPgCa5OTrgL9AKq4loyo03fvG5ZWoGb3bFJe3XxXYqhZYXzHdKEPlG%2B1ij4Im1HDlYyH%2BpsjmSTzFk6e%2FQPY%2BiBQ3z36j&connectionData=%5B%7B%22name%22%3A%22corehub%22%7D%5D&tid=6
+-- - signalr/connect
+-- - transport=webSockets
+-- - clientProtocol=1.5
+-- - connectionToken=9sFtmdh6rzbX3ZP4%2F%2B7zPgCa5OTrgL9AKq4loyo03fvG5ZWoGb3bFJe3XxXYqhZYXzHdKEPlG%2B1ij4Im1HDlYyH%2BpsjmSTzFk6e%2FQPY%2BiBQ3z36j
+-- - connectionData=%5B%7B%22name%22%3A%22corehub%22%7D%5D
+-- - tid=6
+
+get ∷ Text → IO BL.ByteString
+get uri = do
   logger ← Log.new $ o'logging options
   manager ← newTlsManagerWith tlsManagerSettings
             { HTTP.managerModifyRequest =
               (\r → (Log.trace logger (Log.msg $ showT r)) >> pure r)
             , HTTP.managerModifyResponse =
               (\r → do
-                  (Log.trace logger (Log.msg $ showT $ HTTP.responseStatus r))
-                  (Log.trace logger (Log.msg $ showT $ HTTP.responseHeaders r))
-                  (Log.flush logger)
-                  -- body ← HTTP.responseBody r
-                  -- (Log.trace logger (Log.msg $ showT $ body))
+                  Log.trace logger (Log.msg $ showT $ HTTP.responseStatus r)
+                  Log.trace logger (Log.msg $ showT $ HTTP.responseHeaders r)
                   pure r) }
   initReq ← HTTP.parseRequest $ T.unpack uri
-  bs ← flip HTTP.httpLbs manager
-       $ initReq { HTTP.method = "GET", HTTP.port = 443, HTTP.secure = True
-                 , HTTP.requestHeaders = [("Accept", "application/json;charset=utf-8,application/json")] }
-  putStrLn $ show bs
-  pure ()
+  r ← flip HTTP.httpLbs manager
+      $ initReq { HTTP.method = "GET", HTTP.port = 443, HTTP.secure = True
+                , HTTP.requestHeaders = [("Accept", "application/json;charset=utf-8,application/json")] }
+  Log.trace logger (Log.msg $ showT $ HTTP.responseBody r)
+  Log.flush logger
+  pure $ HTTP.responseBody r
 
-run ∷ HasCallStack ⇒ ClientM a → IO a
-run action = do
+decode ∷ (HasCallStack, FromJSON r) ⇒ BL.ByteString → r
+decode bs = do
+  case eitherDecode bs of
+    Left e     → error e
+    Right resp → resp
+
+runHTTP, runSignalr ∷ HasCallStack ⇒ ClientM a → IO a
+runHTTP    = run' bittrexHTTPURL
+runSignalr = run' bittrexSignalrURL
+
+run' ∷ HasCallStack ⇒ BaseUrl → ClientM a → IO a
+run' baseurl action = do
   logger ← Log.new $ o'logging options
   manager ← newTlsManagerWith tlsManagerSettings
             { HTTP.managerModifyRequest =
               (\r → do
-                  (Log.trace logger (Log.msg $ showT r))
-                  (Log.flush logger)
+                  Log.trace logger (Log.msg $ showT r)
+                  Log.flush logger
                   pure r)
             , HTTP.managerModifyResponse =
               (\r → do
-                  -- (Log.trace logger (Log.msg $ showT $ HTTP.responseStatus r))
-                  -- (Log.trace logger (Log.msg $ showT $ HTTP.responseHeaders r))
-                  -- (Log.flush logger)
-                  -- body ← HTTP.responseBody r
-                  -- (Log.trace logger (Log.msg $ showT $ body))
+                  Log.trace logger (Log.msg $ showT $ HTTP.responseStatus r)
+                  Log.trace logger (Log.msg $ showT $ HTTP.responseHeaders r)
+                  Log.flush logger
                   pure r)
             }
-  let conn = ClientEnv manager bittrexURL
+  let conn = ClientEnv manager baseurl
   res ← (flip runClientM conn -- ∘ flip runReaderT logger
         ) $ do
     -- lift
@@ -93,7 +211,7 @@ run action = do
     Left err → error $ "Error: " <> show err
     Right x  → pure x
 
-type BittrexAPI =
+type BittrexHTTP =
           "public/getmarkets"
           :> Get '[JSON] (Response [DescMarket])
      :<|> "public/getcurrencies"
@@ -114,8 +232,8 @@ type BittrexAPI =
           :> QueryParam "market" A'Pair
           :> Get '[JSON] (Response [DescMarketHistoryPoint])
 
-bittrexAPI ∷ Proxy BittrexAPI
-bittrexAPI = Proxy
+bittrexHTTP ∷ Proxy BittrexHTTP
+bittrexHTTP = Proxy
 
 getmarkets, getcurrencies, getticker, getmarketsummaries, getmarketsummary, getorderbook, getmarkethistory ∷ _
 getmarkets           :<|>
@@ -126,7 +244,7 @@ getmarkets           :<|>
   getorderbook       :<|>
   getmarkethistory
   =
-  client bittrexAPI
+  client bittrexHTTP
 
 
 -- * API data structures

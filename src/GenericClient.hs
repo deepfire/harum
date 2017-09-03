@@ -43,27 +43,27 @@ handlerr action = flt <$> action
 get'book ∷ HasCallStack ⇒ (SingI a, SingI b) ⇒ Market a b → ClientM (Book a b)
 get'book market = do
   DescOrderBook{..} ← handlerr $ getorderbook (Just ∘ A'Pair $ pair market) (Just OBBoth)
-  let Pair sbid sask = pair market
-      bids = [ Order { rate   = Rate BID sbid sask poRate
+  let SPair sbid sask = pair market
+      bids = [ Order { rate   = Rate SBid sbid sask poRate
                      , volume = poQuantity }
              | DescPosition{..} ← obbuy ]
-      asks = [ Order { rate   = Rate ASK sbid sask poRate
+      asks = [ Order { rate   = Rate SAsk sbid sask poRate
                      , volume = poQuantity }
              | DescPosition{..} ← obsell ]
   pure Book{..}
 
-get'market ∷ HasCallStack ⇒ (SingI a, SingI b) ⇒ Pair a b → ClientM (Market a b)
-get'market pa@(Pair base mkt) = do
+get'market ∷ HasCallStack ⇒ (SingI a, SingI b) ⇒ SPair' a b → ClientM (Market a b)
+get'market pa@(SPair base mkt) = do
   let name'wanted = pp pa
   [DescMarketSummary{..}] ← handlerr $ getmarketsummary (Just ∘ A'Pair $ pa)
   unless (name'wanted ≡ msMarketName) $
     error $ printf "BTX inconsistency: expected %s, got %s" name'wanted msMarketName
-  let mk'bid  = Rate BID  base mkt msBid
-      mk'ask  = Rate ASK  base mkt msAsk
-      mk'last = Rate Last base mkt msLast
+  let mk'bid  = Rate SBid  base mkt msBid
+      mk'ask  = Rate SAsk  base mkt msAsk
+      -- mk'last = Rate Last base mkt msLast
   pure Market{..}
 
-get'trade ∷ HasCallStack ⇒ (SingI a, SingI b) ⇒ Pair a b → ClientM (Trade a b)
+get'trade ∷ HasCallStack ⇒ (SingI a, SingI b) ⇒ SPair' a b → ClientM (Trade a b)
 get'trade pa = do
   market ← get'market pa
   book   ← get'book market

@@ -27,6 +27,9 @@ executable harum
                      , bytestring
                      , cabal-doctest
                      , containers >=0.5
+                     , dependent-map
+                     , dependent-sum
+                     , dependent-sum-template
                      , doctest
                      , ghc-prim >=0.4
                      , hashable

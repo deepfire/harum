@@ -1,5 +1,5 @@
 {-# OPTIONS_GHC -Wall -fno-warn-unused-do-bind -Wno-unticked-promoted-constructors -Wno-orphans -Wno-unused-top-binds #-}
-{-# LANGUAGE FlexibleContexts, FlexibleInstances, GADTs, OverloadedStrings, PartialTypeSignatures, RecordWildCards, StandaloneDeriving, TypeOperators, UnicodeSyntax #-}
+{-# LANGUAGE FlexibleContexts, FlexibleInstances, GADTs, KindSignatures, OverloadedStrings, PartialTypeSignatures, RecordWildCards, ScopedTypeVariables, StandaloneDeriving, TypeOperators, UnicodeSyntax #-}
 {-# LANGUAGE DataKinds, DeriveFunctor, DeriveTraversable, EmptyCase, NoMonomorphismRestriction, RankNTypes #-}
 
 module Main (main)
@@ -31,6 +31,7 @@ import qualified Data.Text.IO                     as T
 import           Data.Text                           (Text)
 import           Data.Maybe
 import           Data.Monoid                         ((<>))
+import           Data.Singletons
 import           Data.Traversable
 import qualified Data.Vector                      as V
 -- import qualified Debug.Trace                      as D
@@ -50,6 +51,7 @@ import qualified Graphics.Vty                     as Vty
 import           Types
 import qualified Bittrex                          as Bittrex
 import           GenericClient
+import           Triangle
 -- import           Harum
 
 
@@ -57,33 +59,33 @@ import           GenericClient
 instance PP (Order k a b) where
   pp Order{..} = T.pack $ printf "%-*s %*.7f" (int 14) (brief rate) (int 11) volume
 
-trade'hud ∷ Int → A'Trade → [Text]
-trade'hud depth (A'Trade (Trade m@Market{..} Book{..})) =
-  let Pair{..}     = pair m
-      info         = T.pack $ printf ". %-*.7f" (int 11) (fromRate mk'last)
-      asks'        = take depth (pp <$> asks)
-      bids'        = take depth (pp <$> bids)
-      width        = fromMaybe 22 $ (T.length <$> headMay asks')
-      head'left    = show p'base
-      head'right   = show p'market
-      header       = T.pack $ printf "%-*s%*s" (width `div` 2 + width `mod` 2) head'left (width `div` 2) head'right
-  in [    header ]
-     <>   reverse asks'
-     <> [ info ]
-     <>           bids'
+-- trade'hud ∷ Int → A'Trade → [Text]
+-- trade'hud depth (A'Trade (Trade m@Market{..} Book{..})) =
+--   let SPair{..}    = pair m
+--       info         = T.pack $ printf ". %-*.7f" (int 11) (fromRate mk'last)
+--       asks'        = take depth (pp <$> asks)
+--       bids'        = take depth (pp <$> bids)
+--       width        = fromMaybe 22 $ (T.length <$> headMay asks')
+--       head'left    = show p'base
+--       head'right   = show p'market
+--       header       = T.pack $ printf "%-*s%*s" (width `div` 2 + width `mod` 2) head'left (width `div` 2) head'right
+--   in [    header ]
+--      <>   reverse asks'
+--      <> [ info ]
+--      <>           bids'
 
-hud'frame ∷ ClientM ()
-hud'frame = do
-  trades ← sequence [ A'Trade <$> get'trade pa
-                    | A'Pair pa ← default'pairs ]
-  let huds      = trade'hud 10 <$> trades
-      hud'ws    = (maximum ∘ (T.length <$>)) <$> huds
-      hud'lines = transpose huds
-      hud       = [ T.concat ∘ intersperse "  │  "
-                    $ (uncurry justify <$> zip widths lines)
-                  | (widths, lines) ← zip (repeat hud'ws) hud'lines]
-      justify w s = T.pack $ printf "%-*s" w s
-  liftIO $ forM_ hud T.putStrLn
+-- hud'frame ∷ ClientM ()
+-- hud'frame = do
+--   trades ← sequence [ A'Trade <$> get'trade pa
+--                     | A'Pair pa ← default'pairs ]
+--   let huds      = trade'hud 10 <$> trades
+--       hud'ws    = (maximum ∘ (T.length <$>)) <$> huds
+--       hud'lines = transpose huds
+--       hud       = [ T.concat ∘ intersperse "  │  "
+--                     $ (uncurry justify <$> zip widths lines)
+--                   | (widths, lines) ← zip (repeat hud'ws) hud'lines]
+--       justify w s = T.pack $ printf "%-*s" w s
+--   liftIO $ forM_ hud T.putStrLn
 
 
 listAttrName, listSelAttrName, activeColAttrName, selActiveColAttrName :: AttrName
@@ -114,9 +116,9 @@ data HEv
 
 default'pairs ∷ [] A'Pair
 default'pairs =
-  [ A'Pair $ Pair SUSDT SBTC
-  , A'Pair $ Pair SUSDT SBCC
-  , A'Pair $ Pair SBTC  SBCC
+  [ A'Pair $ SPair SUSDT SBTC
+  , A'Pair $ SPair SUSDT SBCC
+  , A'Pair $ SPair SBTC  SBCC
   ]
 
 data UIName = UIName Text deriving (Show, Eq, Ord)
@@ -247,14 +249,36 @@ app = M.App
   , M.appAttrMap      = const attributesMap
   }
 
+watch'triangle ∷ (SingI a, SingI b, SingI c) ⇒ SPair' a b → SPair' b c → SPair' a c → Val c → IO ()
+watch'triangle pab pbc pac value = Bittrex.runHTTP loop
+  where
+    loop = do
+      m'a'b ← get'market pab
+      m'a'c ← get'market pac
+      m'b'c ← get'market pbc
+      let cost = TxnCostFactor 1.0025
+          -- x ∷ (TriFactor a b c, TriFactor a c b, Val a, Val a)
+          x@(triabc, triacb, vabc, vacb) =  triangulate cost value m'a'b m'b'c m'a'c
+      liftIO $ printf "%s → %s → %s: %f / %f | %s → %s → %s: %f / %f"
+        (pp a) (pp b) (pp c)
+        (fromTriFactor triabc) (v'val vabc)
+        (fromTriFactor triacb) (v'val vacb)
+      loop
+
+watch'triangle'SBCC'SBTC'SUSDT ∷ Val BCC → IO ()
+watch'triangle'SBCC'SBTC'SUSDT =
+  watch'triangle (Pair SBTC SBCC) (Pair SUSDT SBCC) (Pair SUSDT SBTC)
+
 main ∷ IO ()
-main = Bittrex.runHTTP $ do
-  event'chan ← liftIO $ newBChan 10
-  trades ← sequence [ A'Trade <$> get'trade p
-                    | A'Pair p ← default'pairs ]
-  liftIO $ M.customMain (Vty.mkVty Vty.defaultConfig)
-    (Just event'chan) app (initial'state trades)
-  pure ()
+main = -- Bittrex.runHTTP $ do
+  -- event'chan ← liftIO $ newBChan 10
+  -- trades ← sequence [ A'Trade <$> get'trade p
+  --                   | A'Pair p ← default'pairs ]
+  -- liftIO $ M.customMain (Vty.mkVty Vty.defaultConfig)
+  --   (Just event'chan) app (initial'state trades)
+  -- pure ()
+
+  watch'triangle SBCC SBTC SUSDT (undefined)
 
 -- *
 -- → https://bittrex.com/Market/Index?MarketName=BTC-BCC

@@ -10,6 +10,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeInType #-}
 {-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE UnicodeSyntax #-}
 
 {-# OPTIONS_GHC -Wno-unused-imports #-}
 

@@ -1,4 +1,4 @@
-{-# OPTIONS_GHC -Wall -Wno-unticked-promoted-constructors -Wno-orphans #-}
+{-# OPTIONS_GHC -Wall -Wno-unticked-promoted-constructors -Wno-orphans -Wno-partial-type-signatures #-}
 {-# LANGUAGE FlexibleContexts, FlexibleInstances, GADTs, GeneralizedNewtypeDeriving, OverloadedStrings, PartialTypeSignatures, RecordWildCards, ScopedTypeVariables, StandaloneDeriving, TypeOperators, UnicodeSyntax #-}
 {-# LANGUAGE DataKinds, KindSignatures #-}
 {-# LANGUAGE DeriveGeneric #-}
@@ -7,7 +7,7 @@ module Bittrex
 where
 
 import           Control.Arrow                       ((>>>))
-import           Control.Monad                       (unless, void)
+import           Control.Monad                       (void)
 import           Control.Monad.IO.Class
 import           Control.Monad.Trans.Control      as CMTC
 import qualified Data.Aeson                       as AE
@@ -22,6 +22,7 @@ import           Data.Monoid                         ((<>))
 import           Data.Proxy                          (Proxy(..))
 import           Data.String
 import           Data.Text                           (Text)
+import           Data.Foldable                       (asum)
 import           Data.List                           (stripPrefix)
 import qualified Data.Text                        as T
 import qualified Data.Text.Encoding               as T
@@ -338,10 +339,30 @@ data DescMarketHistoryPoint where
     , mhPrice              ∷ Double
     , mhTotal              ∷ Double
     , mhFillType           ∷ FillType
-    , mhOrderType          ∷ Direction
+    , mhOrderType          ∷ Dir
     } → DescMarketHistoryPoint
     deriving (Show, Generic)
 instance FromJSON DescMarketHistoryPoint where parseJSON = dropPrefix "mh"
+
+
+-- * Extras for bindings
+--
+data FillType where
+  Fill        ∷ FillType
+  PartialFill ∷ FillType
+  deriving (Generic, Show)
+
+data OrderBookType
+  = OBBuy
+  | OBSell
+  | OBBoth
+  deriving (Show, Generic)
+
+instance FromJSON Sym
+instance FromJSON Dir where
+  parseJSON = withObject "direction" $
+    \_ → asum [ pure Bid, pure Ask ]
+instance FromJSON FillType
 
 
 dropPrefix ∷ (Generic a, GFromJSON Zero (Rep a)) ⇒ String → Value → Parser a
@@ -355,5 +376,7 @@ instance ToHttpApiData OrderBookType where
   toQueryParam = T.drop 2 ∘ lowerShowT
 
 instance ToHttpApiData A'Pair where
-  toUrlPiece   = T.toLower ∘ pp
-  toQueryParam = T.toLower ∘ pp
+  toUrlPiece   = pp
+  toQueryParam = pp
+  -- toUrlPiece   = T.toLower ∘ pp
+  -- toQueryParam = T.toLower ∘ pp
